@@ -78,4 +78,4 @@ Follow the interactive prompts for optional actions:
 - **Zero Dependencies**: Only uses tools pre-installed on standard Linux Mint/Ubuntu systems
 
 ## License
-Free to use, modify, and distribute. No warranty provided - use at your own risk.
+[License](LICENSE) - MIT License. Free to use, modify, and distribute. No warranty provided - use at your own risk.
