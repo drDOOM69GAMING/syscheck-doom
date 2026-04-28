@@ -25,13 +25,13 @@ A comprehensive, zero-dependency system audit tool that checks updates, package 
 ## Installation
 Clone the repository:
 ```bash
-git clone https://github.com/<your-username>/waynes-syscheck-doom.git
-cd waynes-syscheck-doom
+git clone https://github.com/drDOOM69GAMING/syscheck-doom.git
+cd syscheck-doom
 ```
 
 Or download the script directly:
 ```bash
-wget https://raw.githubusercontent.com/<your-username>/waynes-syscheck-doom/main/waynes_syscheck.sh
+wget https://raw.githubusercontent.com/drDOOM69GAMING/syscheck-doom/main/waynes_syscheck.sh
 chmod +x waynes_syscheck.sh
 ```
 
