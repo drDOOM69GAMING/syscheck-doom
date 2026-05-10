@@ -6,8 +6,9 @@
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE="${SCRIPT_DIR}/waynes_syscheck_$(date '+%Y-%m-%d_%H-%M-%S').log"
-exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' > "$LOG_FILE")) 2>&1
+FINAL_LOG="${SCRIPT_DIR}/waynes_syscheck_$(date '+%Y-%m-%d_%H-%M-%S').log"
+TMP_LOG=$(mktemp "/tmp/waynes_syscheck_XXXXXXXX.log")
+exec > >(tee >(sed 's/\x1b\[[0-9;]*m//g' > "$TMP_LOG")) 2>&1
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -364,14 +365,24 @@ DOT_STATUS=$(resolvectl status 2>/dev/null | grep -m1 'Protocols:' | grep -o '+D
 DNSSEC_STATUS=$(resolvectl status 2>/dev/null | grep -m1 'DNSSEC=' | grep -o 'DNSSEC=yes\|DNSSEC=allow-downgrade\|DNSSEC=no')
 DNS_SERVER=$(resolvectl status 2>/dev/null | grep 'Current DNS Server' | head -1 | awk '{print $NF}')
 
-# Verify DNS-over-TLS by checking for active TLS connections to DNS server
+# Verify DNS-over-TLS by triggering a query and checking for an active TLS connection
 DOT_VERIFIED=0
 if [[ "$DOT_STATUS" == "+DNSOverTLS" ]] && [[ -n "$DNS_SERVER" ]]; then
-    # Extract IP from DNS_SERVER (remove #suffix if present)
     DNS_IP=$(echo "$DNS_SERVER" | cut -d'#' -f1)
-    # Check for active TCP connections on port 853 (DoT) to the DNS server
+
+    # Force a real DNS lookup — this will create an on-demand TLS connection
+    timeout 2 resolvectl query --cache=no google.com 2>/dev/null || true
+
     if command -v ss &>/dev/null; then
+        # Check for active TLS connections to the DNS server on port 853
         if ss -tnp 2>/dev/null | grep ":853 " | grep -q "$DNS_IP"; then
+            DOT_VERIFIED=1
+        fi
+    fi
+
+    # If ss check failed, try openssl s_client as a definitive test
+    if (( DOT_VERIFIED == 0 )) && command -v openssl &>/dev/null; then
+        if timeout 3 openssl s_client -connect "$DNS_IP:853" -servername "${DNS_SERVER#*#}" 2>&1 | grep -q "CONNECTED"; then
             DOT_VERIFIED=1
         fi
     fi
@@ -599,7 +610,7 @@ echo -e "${BLUE}${BOLD}  SYSTEM HEALTH REPORT${NC}"
 echo -e "${BLUE}${BOLD}  ════════════════════════════════════════════════════${NC}"
 
 if (( GLOBAL_ISSUES == 0 )); then
-    echo -e "  ${GREEN}${BOLD}✔  All systems nominal. Wayne's rig is perfect.${NC}"
+    echo -e "  ${GREEN}${BOLD}✔  All systems nominal.${NC}"
 else
     echo -e "  ${YELLOW}${BOLD}⚠  ${GLOBAL_ISSUES} issue(s) need attention.${NC}"
 fi
@@ -610,5 +621,11 @@ echo -e "${BLUE}${BOLD}  ══════════════════�
 echo
 read -rp "  Press Enter to exit..."
 echo
-echo -e "  ${DIM}Log saved to: ${LOG_FILE}${NC}"
+# Only save log when issues were found; discard otherwise
+if (( GLOBAL_ISSUES > 0 )); then
+    mv "$TMP_LOG" "$FINAL_LOG"
+    echo -e "  ${DIM}Log saved to: ${FINAL_LOG}${NC}"
+else
+    rm -f "$TMP_LOG"
+fi
 echo
