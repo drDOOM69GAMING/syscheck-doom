@@ -291,15 +291,37 @@ fi
 # =============================================================================
 section "Storage Optimization"
 
+INIT_SYS=$(ps -p 1 -o comm= 2>/dev/null || echo "unknown")
+if command -v nala &>/dev/null; then PKG_MGR="nala"; else PKG_MGR="apt"; fi
+SUDO_GROUP=$(grep -Po '^sudo:\K.*' /etc/group 2>/dev/null | awk -F: '{print $NF}')
+
+echo -e "  ${CYAN}•${NC}  Init system:        ${INIT_SYS}"
+echo -e "  ${CYAN}•${NC}  Architecture:       $(uname -m)"
+echo -e "  ${CYAN}•${NC}  Package manager:    ${PKG_MGR}"
+echo -e "  ${CYAN}•${NC}  Super user group:   ${SUDO_GROUP:-sudo}"
+echo
+
 APT_CACHE_SIZE=$(sudo du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}')
 info "APT cache:   ${YELLOW}${APT_CACHE_SIZE}${NC}"
 read -rp "  Perform deep clean? (y/N): " deep_clean
-if [[ "$deep_clean" =~ ^[Yy]$ ]]; then
-    sudo apt-get clean
-    sudo apt-get autoremove -y >/dev/null 2>&1
+if [[ "$deep_clean" =~ ^[Yy](es)?$ ]]; then
+    echo -e "  ${YELLOW}⚠${NC}  Performing system cleanup..."
+    if command -v nala &>/dev/null; then
+        sudo nala autoclean -y 2>/dev/null || true
+        sudo nala clean 2>/dev/null || true
+        sudo nala autoremove -y 2>/dev/null || true
+    else
+        sudo apt-get autoclean
+        sudo apt-get clean
+        sudo apt-get autoremove -y >/dev/null 2>&1
+    fi
+    echo -e "  ${CYAN}•${NC}  $(sudo du -sh /var/cache/apt/archives/partial 2>/dev/null | awk '{printf "%s\t%s", $1, $2}')"
+    echo -e "  ${CYAN}•${NC}  $(sudo du -sh /var/cache/apt/archives 2>/dev/null | awk '{printf "%s\t%s", $1, $2}')"
+    echo -e "  ${CYAN}•${NC}  $(sudo du -sh /var/cache/apt 2>/dev/null | awk '{printf "%s\t%s", $1, $2}')"
 
     FLAT_BEFORE=$(sudo du -sh /var/lib/flatpak 2>/dev/null | awk '{print $1}')
-    sudo flatpak uninstall --unused -y >/dev/null 2>&1
+    flatpak uninstall --unused --non-interactive -y 2>/dev/null || true
+    sudo flatpak uninstall --unused --non-interactive -y 2>/dev/null || true
     FLAT_AFTER=$(sudo du -sh /var/lib/flatpak 2>/dev/null | awk '{print $1}')
     [[ "$FLAT_BEFORE" != "$FLAT_AFTER" ]] \
         && info "Flatpak:     ${RED}${FLAT_BEFORE}${NC} → ${GREEN}${FLAT_AFTER}${NC}" \
@@ -312,24 +334,83 @@ if [[ "$deep_clean" =~ ^[Yy]$ ]]; then
         && info "Journal:     ${RED}${JOURNAL_BEFORE}${NC} → ${GREEN}${JOURNAL_AFTER}${NC}" \
         || info "Journal:     ${GREEN}Already clean${NC}"
 
-    THUMB_SIZE=$(du -sh ~/.cache/thumbnails 2>/dev/null | awk '{print $1}')
-    if [[ -n "$THUMB_SIZE" && "$THUMB_SIZE" != "0" ]]; then
-        rm -rf ~/.cache/thumbnails/* 2>/dev/null
-        info "Thumbnails:  ${RED}${THUMB_SIZE}${NC} → ${GREEN}0${NC}"
-    else
-        info "Thumbnails:  ${GREEN}Already clean${NC}"
+    echo
+    read -rp "  Clean up old cache files and empty the trash? (y/N): " clean_cache
+    if [[ "$clean_cache" =~ ^[Yy](es)?$ ]]; then
+        echo -e "  ${YELLOW}⚠${NC}  Cleaning up old cache files and emptying trash..."
+
+        TMP_SIZE=$(sudo du -sh /tmp 2>/dev/null | awk '{print $1}')
+        sudo find /tmp -type f -atime +1 -delete 2>/dev/null || true
+        sudo find /tmp -type d -empty -delete 2>/dev/null || true
+        TMP_AFTER=$(sudo du -sh /tmp 2>/dev/null | awk '{print $1}')
+        [[ "$TMP_SIZE" != "$TMP_AFTER" ]] \
+            && info "/tmp:        ${RED}${TMP_SIZE}${NC} → ${GREEN}${TMP_AFTER}${NC}" \
+            || info "/tmp:        ${GREEN}Already clean${NC}"
+
+        VTMP_SIZE=$(sudo du -sh /var/tmp 2>/dev/null | awk '{print $1}')
+        sudo find /var/tmp -type f -atime +1 -delete 2>/dev/null || true
+        sudo find /var/tmp -type d -empty -delete 2>/dev/null || true
+        VTMP_AFTER=$(sudo du -sh /var/tmp 2>/dev/null | awk '{print $1}')
+        [[ "$VTMP_SIZE" != "$VTMP_AFTER" ]] \
+            && info "/var/tmp:   ${RED}${VTMP_SIZE}${NC} → ${GREEN}${VTMP_AFTER}${NC}" \
+            || info "/var/tmp:   ${GREEN}Already clean${NC}"
+
+        THUMB_SIZE=$(du -sh ~/.cache/thumbnails 2>/dev/null | awk '{print $1}')
+        if [[ -n "$THUMB_SIZE" && "$THUMB_SIZE" != "0" ]]; then
+            rm -rf ~/.cache/thumbnails/* 2>/dev/null
+            info "Thumbnails:  ${RED}${THUMB_SIZE}${NC} → ${GREEN}0${NC}"
+        fi
+
+        TRASH_SIZE=$(du -sh ~/.local/share/Trash/files 2>/dev/null | awk '{print $1}')
+        if [[ -n "$TRASH_SIZE" && "$TRASH_SIZE" != "0" ]]; then
+            find "$HOME/.local/share/Trash/files" -mindepth 1 -delete 2>/dev/null || true
+            find "$HOME/.local/share/Trash/info" -mindepth 1 -delete 2>/dev/null || true
+            info "Trash:       ${RED}${TRASH_SIZE}${NC} → ${GREEN}0${NC}"
+        fi
+
+        echo
+        info "${BOLD}Dev tool caches:${NC}"
+        if [ -d "$HOME/.cache/pip" ]; then
+            rm -rf "$HOME/.cache/pip" 2>/dev/null || true
+            info "  pip cache      Cleared"
+        fi
+        command -v npm &>/dev/null && npm cache clean --force 2>/dev/null || true
+        command -v pnpm &>/dev/null && pnpm store prune 2>/dev/null || true
+        command -v yarn &>/dev/null && yarn cache clean 2>/dev/null || true
+        [ -d "$HOME/.cargo/registry/cache" ] && rm -rf "$HOME/.cargo/registry/cache" 2>/dev/null || true
+        if [ -d "$HOME/.m2/repository" ]; then
+            info "  Maven cache    Cleared (re-downloads on next build)"
+            rm -rf "$HOME/.m2/repository" 2>/dev/null || true
+        fi
+        if command -v go &>/dev/null; then
+            info "  Go modcache    Cleared (re-downloads on next build)"
+            go clean -modcache 2>/dev/null || true
+        fi
+        if command -v docker &>/dev/null; then
+            docker system prune -f 2>/dev/null || true
+            docker builder prune -f 2>/dev/null || true
+        fi
+
+        echo
+        info "${BOLD}Scanning for heavy dev directories:${NC}"
+        find "$HOME" \
+            \( -path "$HOME/.local" -o \
+               -path "$HOME/.config" -o \
+               -path "$HOME/.cache" -o \
+               -path "$HOME/.mozilla" -o \
+               -path "$HOME/.var" \) -prune \
+            -o -type d \( \
+            -name "node_modules" -o \
+            -name ".venv" -o \
+            -name "venv" -o \
+            -name "__pycache__" -o \
+            -name "target" \
+            \) -prune -exec du -sh {} + 2>/dev/null | sort -hr | column -t -s $'\t' || true
+
+        echo -e "  ${GREEN}✔${NC}  Cache and trash cleanup completed."
     fi
 
-    TRASH_SIZE=$(du -sh ~/.local/share/Trash/files 2>/dev/null | awk '{print $1}')
-    if [[ -n "$TRASH_SIZE" && "$TRASH_SIZE" != "0" ]]; then
-        rm -rf ~/.local/share/Trash/files/* 2>/dev/null
-        info "Trash:       ${RED}${TRASH_SIZE}${NC} → ${GREEN}0${NC}"
-    else
-        info "Trash:       ${GREEN}Already empty${NC}"
-    fi
-
-    NEW_SIZE=$(sudo du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}')
-    ok "Deep clean complete. Cache: ${RED}${APT_CACHE_SIZE}${NC} → ${GREEN}${NEW_SIZE}${NC}"
+    ok "Deep clean complete."
 fi
 
 # =============================================================================
